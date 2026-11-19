@@ -8,7 +8,7 @@ import Loader from '../components/Loader.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import useFetch from '../hooks/useFetch.js';
 import { fetchCustomers } from '../services/api.js';
-import { initials } from '../utils/format.js';
+import CustomerAvatar from '../components/CustomerAvatar.jsx';
 
 const STATUS_TABS = ['Active', 'Checked Out', 'All'];
 
@@ -69,7 +69,7 @@ export default function CustomersPage() {
         <div className="grid grid-customers">
           {customers.map((c) => (
             <Link key={c._id} to={`/customers/${c._id}`} className="card customer-row">
-              <div className="avatar">{initials(c.fullName)}</div>
+              <CustomerAvatar customer={c} />
               <div className="customer-text">
                 <h3>{c.fullName}</h3>
                 <p className="muted">

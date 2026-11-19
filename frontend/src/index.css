@@ -1057,3 +1057,217 @@ select {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ================= Added for: Payments, Reports, Photo/ID upgrade ================= */
+
+/* ---------- Payments page ---------- */
+.payments-filters {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.payments-filters .field:last-child {
+  grid-column: 1 / -1;
+}
+
+.payments-period {
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.payments-summary {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 14px;
+}
+
+.payments-summary .stat:last-child {
+  grid-column: 1 / -1;
+}
+
+.payments-summary .stat-value {
+  font-size: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.grid-payments {
+  gap: 10px;
+}
+
+.payment-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.payment-row-main {
+  min-width: 0;
+}
+
+.payment-name {
+  font-weight: 800;
+  font-size: 1.02rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.payment-row-amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.payment-rent {
+  font-weight: 800;
+}
+
+.payment-row .btn {
+  grid-column: 1 / -1;
+}
+
+.alert-warn {
+  background: var(--orange-bg);
+  color: #7a4300;
+  margin-bottom: 14px;
+}
+
+.missing-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-weight: 600;
+}
+
+.missing-list a {
+  text-decoration: underline;
+}
+
+/* ---------- Profile photo capture ---------- */
+.photo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.photo-preview,
+.photo-placeholder {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.photo-preview {
+  object-fit: cover;
+  border: 3px solid var(--gold);
+  background: var(--gray-bg);
+}
+
+.photo-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--navy);
+  color: var(--gold);
+  font-weight: 800;
+  font-size: 1.3rem;
+}
+
+.photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+.camera-overlay video {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: cover;
+}
+
+.camera-controls {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  background: rgba(10, 18, 36, 0.92);
+}
+
+/* ---------- ID proof card & payment history (customer details) ---------- */
+.doc-card,
+.history-card {
+  margin-top: 14px;
+}
+
+.history-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.history-nav h3 {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--gray-bg);
+}
+
+.history-row-month {
+  font-weight: 800;
+}
+
+.history-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+}
+
+.history-row-date {
+  flex-basis: 100%;
+}
+
+@media (min-width: 640px) {
+  .payments-filters { grid-template-columns: repeat(3, 1fr); }
+  .payments-filters .field:last-child { grid-column: auto; }
+  .payments-summary { grid-template-columns: repeat(3, 1fr); }
+  .payments-summary .stat:last-child { grid-column: auto; }
+  .payment-row { grid-template-columns: 1fr auto auto; }
+  .payment-row .btn { grid-column: auto; min-width: 130px; }
+  .grid-payments { grid-template-columns: 1fr; }
+  .history-row-date { flex-basis: auto; }
+}
+
+@media (min-width: 900px) {
+  .payments-summary { grid-template-columns: repeat(5, 1fr); }
+}

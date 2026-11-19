@@ -3,9 +3,25 @@ const Room = require('../models/Room');
 const Customer = require('../models/Customer');
 const HttpError = require('../utils/HttpError');
 const asyncHandler = require('../utils/asyncHandler');
-const { removeUploadedFile } = require('../utils/files');
 const { countActiveInRoom } = require('../utils/occupancy');
-const { SHARING_TYPES, ID_PROOF_TYPES, CUSTOMER_STATUS } = require('../config/constants');
+const { nextRentHistory, summarizeRent } = require('../utils/rent');
+const {
+  IMAGE_TYPES,
+  ID_PROOF_TYPES_ALLOWED,
+  prepareUpload,
+  storeFile,
+  removeFile,
+  loadFile,
+  describeFile,
+} = require('../utils/files');
+const {
+  SHARING_TYPES,
+  ID_PROOF_TYPES,
+  CUSTOMER_STATUS,
+  FILE_KINDS,
+  MAX_FILE_SIZE,
+  MAX_PROFILE_PHOTO_SIZE,
+} = require('../config/constants');
 
 const CUSTOMER_POPULATE = [
   { path: 'blockId', select: 'name' },
@@ -29,9 +45,28 @@ const normalizeBody = (body) => ({
   expectedCheckoutDate: text(body.expectedCheckoutDate),
   idProofType: text(body.idProofType),
   idNumber: text(body.idNumber),
+  monthlyRent: text(body.monthlyRent),
+  securityDeposit: text(body.securityDeposit),
 });
 
 const isValidDate = (value) => !Number.isNaN(new Date(value).getTime());
+
+const photoRules = {
+  kind: FILE_KINDS.PROFILE_PHOTO,
+  field: 'profilePhoto',
+  allowedTypes: IMAGE_TYPES,
+  maxBytes: MAX_PROFILE_PHOTO_SIZE,
+  typeMessage: 'Profile photo must be a JPG, PNG or WEBP image.',
+  sizeMessage: 'Photo is too large. Maximum size is 3 MB.',
+};
+const idProofRules = {
+  kind: FILE_KINDS.ID_PROOF,
+  field: 'idProofFile',
+  allowedTypes: ID_PROOF_TYPES_ALLOWED,
+  maxBytes: MAX_FILE_SIZE,
+  typeMessage: 'Invalid ID proof file. Upload a JPG, PNG, WEBP image or a PDF.',
+  sizeMessage: 'File is too large. Maximum size is 5 MB.',
+};
 
 /** Validates raw input. Returns cleaned values or throws a 400 with per-field errors. */
 const validateCustomer = (raw, hasIdFile) => {
@@ -75,6 +110,17 @@ const validateCustomer = (raw, hasIdFile) => {
   }
   if (!hasIdFile) errors.idProofFile = 'Upload the ID proof.';
 
+  // Monthly rent is required and > 0. Deposit is optional and defaults to 0.
+  const rent = Number(data.monthlyRent);
+  if (!data.monthlyRent) errors.monthlyRent = 'Monthly rent is required.';
+  else if (!Number.isFinite(rent) || rent <= 0 || rent > 1000000) {
+    errors.monthlyRent = 'Monthly rent must be greater than zero.';
+  }
+  const deposit = data.securityDeposit === '' ? 0 : Number(data.securityDeposit);
+  if (!Number.isFinite(deposit) || deposit < 0 || deposit > 10000000) {
+    errors.securityDeposit = 'Enter a valid security deposit.';
+  }
+
   if (Object.keys(errors).length) {
     throw new HttpError(400, 'Please correct the highlighted fields.', errors);
   }
@@ -83,6 +129,8 @@ const validateCustomer = (raw, hasIdFile) => {
     ...data,
     mobile: mobileMatch[1],
     expectedCheckoutDate: data.expectedCheckoutDate || undefined,
+    monthlyRent: rent,
+    securityDeposit: deposit,
   };
 };
 
@@ -109,17 +157,54 @@ const findCustomerOr404 = async (id) => {
   return customer;
 };
 
+/** Customer as JSON plus file facts (image/PDF/missing) and a rent summary for the UI. */
+const serialize = async (customer) => {
+  await customer.populate(CUSTOMER_POPULATE);
+  const plain = customer.toObject();
+  const [idProofMeta, photoMeta] = await Promise.all([
+    describeFile(plain.idProofFile),
+    describeFile(plain.profilePhoto),
+  ]);
+  return {
+    ...plain,
+    idProofMeta,
+    profilePhotoAvailable: Boolean(plain.profilePhoto) && photoMeta.available,
+    rentSummary: summarizeRent(plain.rentHistory),
+  };
+};
+
+const files = (req) => ({
+  photo: req.files?.profilePhoto?.[0],
+  idProof: req.files?.idProofFile?.[0],
+});
+
 const createCustomer = async (req, res, next) => {
-  const uploaded = req.file;
+  const storedRefs = []; // files written during this request, removed again if it fails
   try {
-    const data = validateCustomer(req.body, Boolean(uploaded));
+    const { photo, idProof } = files(req);
+    const data = validateCustomer(req.body, Boolean(idProof));
+    const photoUpload = prepareUpload(photo, photoRules);
+    const idUpload = prepareUpload(idProof, idProofRules);
     const room = await loadValidRoom(data);
 
     if ((await countActiveInRoom(room._id)) >= room.capacity) {
       throw new HttpError(409, ROOM_FULL_MESSAGE);
     }
 
-    const customer = await Customer.create({ ...data, idProofFile: uploaded.filename });
+    const idProofFile = await storeFile(idUpload);
+    storedRefs.push(idProofFile);
+    let profilePhoto = '';
+    if (photoUpload) {
+      profilePhoto = await storeFile(photoUpload);
+      storedRefs.push(profilePhoto);
+    }
+
+    const customer = await Customer.create({
+      ...data,
+      idProofFile,
+      profilePhoto,
+      rentHistory: nextRentHistory({ newRent: data.monthlyRent, joiningDate: data.dateOfJoining, isNew: true }),
+    });
 
     // Re-check after writing: guards against two simultaneous requests taking the last bed.
     if ((await countActiveInRoom(room._id)) > room.capacity) {
@@ -127,23 +212,25 @@ const createCustomer = async (req, res, next) => {
       throw new HttpError(409, ROOM_FULL_MESSAGE);
     }
 
-    await customer.populate(CUSTOMER_POPULATE);
-    res.status(201).json(customer);
+    res.status(201).json(await serialize(customer));
   } catch (err) {
-    await removeUploadedFile(uploaded?.filename);
+    await Promise.all(storedRefs.map(removeFile));
     next(err);
   }
 };
 
 const updateCustomer = async (req, res, next) => {
-  const uploaded = req.file;
+  const storedRefs = [];
   try {
     const customer = await findCustomerOr404(req.params.id);
     if (customer.status !== CUSTOMER_STATUS.ACTIVE) {
       throw new HttpError(409, 'Checked-out customers cannot be edited.');
     }
 
-    const data = validateCustomer(req.body, Boolean(uploaded || customer.idProofFile));
+    const { photo, idProof } = files(req);
+    const data = validateCustomer(req.body, Boolean(idProof || customer.idProofFile));
+    const photoUpload = prepareUpload(photo, photoRules);
+    const idUpload = prepareUpload(idProof, idProofRules);
     const room = await loadValidRoom(data);
     const roomChanged = String(customer.roomId) !== data.roomId;
 
@@ -155,33 +242,47 @@ const updateCustomer = async (req, res, next) => {
       blockId: customer.blockId,
       roomId: customer.roomId,
       sharingType: customer.sharingType,
+      idProofFile: customer.idProofFile,
+      profilePhoto: customer.profilePhoto,
     };
-    const previousFile = customer.idProofFile;
+
+    // A new file is only stored if the owner explicitly picked one; otherwise the
+    // existing photo / ID proof is left exactly as it is.
+    const newIdRef = idUpload ? await storeFile(idUpload) : null;
+    if (newIdRef) storedRefs.push(newIdRef);
+    const newPhotoRef = photoUpload ? await storeFile(photoUpload) : null;
+    if (newPhotoRef) storedRefs.push(newPhotoRef);
+
+    // Rent rule: a change applies from next month; months already billed keep their amount.
+    const rentHistory = nextRentHistory({
+      rentHistory: customer.rentHistory.map((e) => ({ rent: e.rent, effectiveFrom: e.effectiveFrom })),
+      newRent: data.monthlyRent,
+      joiningDate: data.dateOfJoining,
+    });
 
     customer.set(data);
-    if (uploaded) customer.idProofFile = uploaded.filename;
+    customer.rentHistory = rentHistory;
+    if (newIdRef) customer.idProofFile = newIdRef;
+    if (newPhotoRef) customer.profilePhoto = newPhotoRef;
     await customer.save();
 
     if (roomChanged && (await countActiveInRoom(room._id)) > room.capacity) {
       customer.set(previous);
-      customer.idProofFile = previousFile;
       await customer.save();
       throw new HttpError(409, ROOM_FULL_MESSAGE);
     }
 
-    if (uploaded) await removeUploadedFile(previousFile);
-    await customer.populate(CUSTOMER_POPULATE);
-    res.json(customer);
+    if (newIdRef) await removeFile(previous.idProofFile);
+    if (newPhotoRef && previous.profilePhoto) await removeFile(previous.profilePhoto);
+    res.json(await serialize(customer));
   } catch (err) {
-    await removeUploadedFile(uploaded?.filename);
+    await Promise.all(storedRefs.map(removeFile));
     next(err);
   }
 };
 
 const getCustomer = asyncHandler(async (req, res) => {
-  const customer = await findCustomerOr404(req.params.id);
-  await customer.populate(CUSTOMER_POPULATE);
-  res.json(customer);
+  res.json(await serialize(await findCustomerOr404(req.params.id)));
 });
 
 const listCustomers = asyncHandler(async (req, res) => {
@@ -198,7 +299,7 @@ const listCustomers = asyncHandler(async (req, res) => {
   res.json(customers);
 });
 
-/** "Removing" a customer checks them out; the record is kept for history. */
+/** "Removing" a customer checks them out; the record and payment history are kept. */
 const removeCustomer = asyncHandler(async (req, res) => {
   const customer = await findCustomerOr404(req.params.id);
   if (customer.status === CUSTOMER_STATUS.CHECKED_OUT) {
@@ -206,9 +307,29 @@ const removeCustomer = asyncHandler(async (req, res) => {
   }
   customer.status = CUSTOMER_STATUS.CHECKED_OUT;
   customer.actualCheckoutDate = new Date();
-  await customer.save();
+  await customer.save({ validateModifiedOnly: true });
   res.json({ message: 'Customer removed successfully.' });
 });
+
+/**
+ * Photos and ID proofs are served ONLY through these per-customer routes - there is no
+ * public /uploads folder. Responses are never cached and never sniffed. NOTE: the app has
+ * no login, so these routes are exactly as private as the app's own address; see the
+ * privacy notes in DELTA.md.
+ */
+const streamCustomerFile = (field) =>
+  asyncHandler(async (req, res) => {
+    const customer = await findCustomerOr404(req.params.id);
+    const file = await loadFile(customer[field]);
+    if (!file) throw new HttpError(404, 'File not found.');
+    res.set({
+      'Content-Type': file.contentType,
+      'Content-Disposition': 'inline',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.send(file.data);
+  });
 
 module.exports = {
   createCustomer,
@@ -216,4 +337,6 @@ module.exports = {
   getCustomer,
   listCustomers,
   removeCustomer,
+  getProfilePhoto: streamCustomerFile('profilePhoto'),
+  getIdProofFile: streamCustomerFile('idProofFile'),
 };

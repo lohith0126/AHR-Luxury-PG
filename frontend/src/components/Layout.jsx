@@ -4,8 +4,9 @@ import Logo from './Logo.jsx';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: 'home', end: true },
-  { to: '/blocks', label: 'Blocks', icon: 'building' },
   { to: '/customers', label: 'Customers', icon: 'users' },
+  { to: '/blocks', label: 'Blocks', icon: 'building' },
+  { to: '/payments', label: 'Payments', icon: 'wallet' },
 ];
 
 export default function Layout() {

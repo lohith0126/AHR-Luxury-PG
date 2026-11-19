@@ -4,19 +4,22 @@ import Breadcrumbs from '../components/Breadcrumbs.jsx';
 import ErrorState from '../components/ErrorState.jsx';
 import Icon from '../components/Icon.jsx';
 import Loader from '../components/Loader.jsx';
+import ProfilePhotoField from '../components/ProfilePhotoField.jsx';
 import { useToast } from '../components/Toast.jsx';
 import {
   fetchBlocks,
   fetchCustomer,
   fetchRoom,
   fetchRooms,
-  fileUrl,
   getErrorMessage,
   getFieldErrors,
+  idProofUrl,
+  profilePhotoUrl,
   saveCustomer,
 } from '../services/api.js';
-import { ID_PROOF_TYPES, SHARING_TYPES } from '../utils/constants.js';
-import { isPdf, toInputDate, todayInputDate } from '../utils/format.js';
+import { ID_PROOF_TYPES, MONTH_NAMES, SHARING_TYPES } from '../utils/constants.js';
+import { compressImage } from '../utils/imageCompress.js';
+import { formatBillingMonth, toInputDate, todayInputDate } from '../utils/format.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
@@ -34,6 +37,8 @@ const emptyForm = () => ({
   expectedCheckoutDate: '',
   idProofType: '',
   idNumber: '',
+  monthlyRent: '',
+  securityDeposit: '',
 });
 
 function Field({ label, required, error, hint, children }) {
@@ -51,7 +56,7 @@ function Field({ label, required, error, hint, children }) {
 }
 
 /** Frontend validation for quick feedback. The backend re-validates everything. */
-const validate = (form, hasFile, selectedRoom, originalRoomId) => {
+const validate = (form, hasIdFile, selectedRoom, originalRoomId) => {
   const errors = {};
   if (!form.fullName.trim()) errors.fullName = 'Full name is required.';
   if (!form.mobile.trim()) errors.mobile = 'Mobile number is required.';
@@ -80,7 +85,16 @@ const validate = (form, hasFile, selectedRoom, originalRoomId) => {
   else if (form.idProofType === 'Aadhaar Card' && !/^\d{12}$/.test(compactId)) {
     errors.idNumber = 'Aadhaar number must be 12 digits.';
   }
-  if (!hasFile) errors.idProofFile = 'Upload the ID proof.';
+  if (!hasIdFile) errors.idProofFile = 'Upload the ID proof.';
+
+  const rent = Number(form.monthlyRent);
+  if (!form.monthlyRent) errors.monthlyRent = 'Monthly rent is required.';
+  else if (!Number.isFinite(rent) || rent <= 0) errors.monthlyRent = 'Monthly rent must be greater than zero.';
+  if (form.securityDeposit) {
+    const deposit = Number(form.securityDeposit);
+    if (!Number.isFinite(deposit) || deposit < 0) errors.securityDeposit = 'Enter a valid deposit amount.';
+  }
+
   return errors;
 };
 
@@ -101,9 +115,15 @@ export default function CustomerForm() {
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
 
-  const [file, setFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [existingFile, setExistingFile] = useState('');
+  const [idFile, setIdFile] = useState(null);
+  const [idPreviewUrl, setIdPreviewUrl] = useState('');
+  const [existingIdProof, setExistingIdProof] = useState(null); // { available, contentType } of the saved document
+  const [rentSummary, setRentSummary] = useState(null);
+
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('');
+  const [hasExistingPhoto, setHasExistingPhoto] = useState(false);
+
   const [originalRoomId, setOriginalRoomId] = useState('');
 
   const [loadError, setLoadError] = useState('');
@@ -136,8 +156,12 @@ export default function CustomerForm() {
           expectedCheckoutDate: toInputDate(c.expectedCheckoutDate),
           idProofType: c.idProofType,
           idNumber: c.idNumber,
+          monthlyRent: String(c.monthlyRent ?? ''),
+          securityDeposit: String(c.securityDeposit ?? ''),
         });
-        setExistingFile(c.idProofFile);
+        setExistingIdProof(c.idProofMeta || { available: false });
+        setRentSummary(c.rentSummary || null);
+        setHasExistingPhoto(Boolean(c.profilePhoto && c.profilePhotoAvailable));
         setOriginalRoomId(c.roomId._id);
         setLoaded(true);
       })
@@ -185,16 +209,27 @@ export default function CustomerForm() {
     };
   }, [form.blockId]);
 
-  // Image preview for a newly picked file
+  // Preview for a newly picked/captured profile photo
   useEffect(() => {
-    if (!file || !file.type.startsWith('image/')) {
-      setPreviewUrl('');
+    if (!photoFile) {
+      setPhotoPreviewUrl('');
       return undefined;
     }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
+    const url = URL.createObjectURL(photoFile);
+    setPhotoPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [file]);
+  }, [photoFile]);
+
+  // Preview for a newly picked ID proof image (not shown for PDFs)
+  useEffect(() => {
+    if (!idFile || !idFile.type.startsWith('image/')) {
+      setIdPreviewUrl('');
+      return undefined;
+    }
+    const url = URL.createObjectURL(idFile);
+    setIdPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [idFile]);
 
   const selectedRoom = rooms.find((room) => room._id === form.roomId);
 
@@ -218,20 +253,29 @@ export default function CustomerForm() {
     if (name === 'blockId' || name === 'roomId') clearError('sharingType');
   };
 
-  const handleFile = (event) => {
+  const handlePhotoChange = (file, errorMessage) => {
+    if (errorMessage) {
+      setErrors((prev) => ({ ...prev, profilePhoto: errorMessage }));
+      return;
+    }
+    setPhotoFile(file);
+    clearError('profilePhoto');
+  };
+
+  const handleIdFile = async (event) => {
     const picked = event.target.files?.[0];
+    event.target.value = '';
     if (!picked) return;
     if (!ALLOWED_FILE_TYPES.includes(picked.type)) {
       setErrors((prev) => ({ ...prev, idProofFile: 'Upload a JPG, PNG, WEBP image or a PDF.' }));
-      event.target.value = '';
       return;
     }
-    if (picked.size > MAX_FILE_BYTES) {
+    const prepared = await compressImage(picked, { maxSide: 1800, quality: 0.85 }); // PDFs pass through untouched
+    if (prepared.size > MAX_FILE_BYTES) {
       setErrors((prev) => ({ ...prev, idProofFile: 'File is too large. Maximum size is 5 MB.' }));
-      event.target.value = '';
       return;
     }
-    setFile(picked);
+    setIdFile(prepared);
     clearError('idProofFile');
   };
 
@@ -240,7 +284,7 @@ export default function CustomerForm() {
     if (saving) return;
     setFormError('');
 
-    const found = validate(form, Boolean(file || existingFile), selectedRoom, originalRoomId);
+    const found = validate(form, Boolean(idFile || existingIdProof?.available), selectedRoom, originalRoomId);
     if (Object.keys(found).length) {
       setErrors(found);
       setFormError('Please correct the highlighted fields.');
@@ -249,7 +293,8 @@ export default function CustomerForm() {
 
     const payload = new FormData();
     Object.entries(form).forEach(([key, value]) => payload.append(key, value));
-    if (file) payload.append('idProofFile', file);
+    if (idFile) payload.append('idProofFile', idFile);
+    if (photoFile) payload.append('profilePhoto', photoFile);
 
     setSaving(true);
     try {
@@ -268,7 +313,14 @@ export default function CustomerForm() {
   if (loadError) return <ErrorState message={loadError} onRetry={() => navigate(-1)} />;
   if (!loaded) return <Loader text="Loading customer..." />;
 
-  const existingIsImage = existingFile && !isPdf(existingFile);
+  const hasSavedId = Boolean(existingIdProof?.available);
+  const existingIdIsPdf = existingIdProof?.contentType === 'application/pdf';
+  const nextMonthLabel = (() => {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return formatBillingMonth(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`, MONTH_NAMES);
+  })();
+  const currentPhotoPreview = photoPreviewUrl || (hasExistingPhoto ? profilePhotoUrl(id) : '');
 
   return (
     <>
@@ -290,6 +342,12 @@ export default function CustomerForm() {
 
         <section className="card form-section">
           <h2>Personal Information</h2>
+          <ProfilePhotoField
+            previewUrl={currentPhotoPreview}
+            fallbackName={form.fullName}
+            error={errors.profilePhoto}
+            onChange={handlePhotoChange}
+          />
           <Field label="Full Name" required error={errors.fullName}>
             <input name="fullName" value={form.fullName} onChange={handleChange} placeholder="Ramesh Kumar" maxLength={100} />
           </Field>
@@ -364,6 +422,47 @@ export default function CustomerForm() {
         </section>
 
         <section className="card form-section">
+          <h2>Payment Information</h2>
+          <div className="field-row">
+            <Field label="Monthly Rent" required error={errors.monthlyRent}>
+              <input
+                name="monthlyRent"
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={form.monthlyRent}
+                onChange={handleChange}
+                placeholder="8000"
+              />
+            </Field>
+            <Field
+              label="Security Deposit"
+              error={errors.securityDeposit}
+              hint="Leave blank if no deposit was collected."
+            >
+              <input
+                name="securityDeposit"
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={form.securityDeposit}
+                onChange={handleChange}
+                placeholder="5000"
+              />
+            </Field>
+          </div>
+          {isEdit && (
+            <p className="field-hint">
+              {rentSummary?.current == null && !rentSummary?.billingStartsOn
+                ? 'No rent was recorded for this customer before. Monthly billing will start from this month once you save.'
+                : `A rent change applies from ${nextMonthLabel}. Months already billed keep their original amount.`}
+            </p>
+          )}
+        </section>
+
+        <section className="card form-section">
           <h2>ID Proof Details</h2>
           <Field label="ID Proof Type" required error={errors.idProofType}>
             <select name="idProofType" value={form.idProofType} onChange={handleChange}>
@@ -379,28 +478,34 @@ export default function CustomerForm() {
             <input name="idNumber" value={form.idNumber} onChange={handleChange} placeholder="1234 5678 9012" maxLength={30} />
           </Field>
 
-          <Field label="Upload ID Proof" required error={errors.idProofFile} hint="JPG, PNG, WEBP or PDF · max 5 MB">
+          <Field label="Upload ID Proof" required error={errors.idProofFile} hint="JPG, PNG, WEBP or PDF · max 5 MB. Separate from the profile photo.">
             <div className="upload-row">
               <label className="upload-box">
                 <Icon name="upload" size={24} />
-                <span>{file || existingFile ? 'Change file' : 'Choose file'}</span>
-                <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={handleFile} hidden />
+                <span>{idFile || hasSavedId ? 'Replace file' : 'Choose file'}</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={handleIdFile} hidden />
               </label>
-              {previewUrl && <img className="upload-preview" src={previewUrl} alt="ID proof preview" />}
-              {file && !previewUrl && (
+              {idPreviewUrl && <img className="upload-preview" src={idPreviewUrl} alt="ID proof preview" />}
+              {idFile && !idPreviewUrl && (
                 <div className="upload-file">
-                  <Icon name="file" size={22} /> {file.name}
+                  <Icon name="file" size={22} /> {idFile.name}
                 </div>
               )}
-              {!file && existingIsImage && (
-                <img className="upload-preview" src={fileUrl(existingFile)} alt="Current ID proof" />
+              {!idFile && hasSavedId && !existingIdIsPdf && (
+                <img className="upload-preview" src={idProofUrl(id)} alt="Current ID proof" />
               )}
-              {!file && existingFile && !existingIsImage && (
-                <a className="upload-file" href={fileUrl(existingFile)} target="_blank" rel="noreferrer">
-                  <Icon name="file" size={22} /> Current PDF
+              {!idFile && hasSavedId && existingIdIsPdf && (
+                <a className="upload-file" href={idProofUrl(id)} target="_blank" rel="noreferrer">
+                  <Icon name="file" size={22} /> {existingIdProof.originalName || 'Current PDF'} (open)
                 </a>
               )}
             </div>
+            {isEdit && existingIdProof && !existingIdProof.available && !idFile && (
+              <span className="field-error">The saved ID document could not be found. Please upload it again.</span>
+            )}
+            {isEdit && hasSavedId && !idFile && (
+              <span className="field-hint">The saved document is kept unless you choose a replacement.</span>
+            )}
           </Field>
         </section>
 

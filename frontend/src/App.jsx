@@ -7,6 +7,7 @@ import RoomPage from './pages/RoomPage.jsx';
 import CustomersPage from './pages/CustomersPage.jsx';
 import CustomerForm from './pages/CustomerForm.jsx';
 import CustomerDetails from './pages/CustomerDetails.jsx';
+import PaymentsPage from './pages/PaymentsPage.jsx';
 import NotFound from './pages/NotFound.jsx';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="customers/new" element={<CustomerForm />} />
         <Route path="customers/:id" element={<CustomerDetails />} />
         <Route path="customers/:id/edit" element={<CustomerForm />} />
+        <Route path="payments" element={<PaymentsPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

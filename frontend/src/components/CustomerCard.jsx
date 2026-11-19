@@ -1,12 +1,12 @@
 import { Link } from 'react-router-dom';
+import CustomerAvatar from './CustomerAvatar.jsx';
 import Icon from './Icon.jsx';
-import { initials } from '../utils/format.js';
 
 export default function CustomerCard({ customer, onRemove }) {
   return (
     <div className="card customer-card">
       <div className="customer-main">
-        <div className="avatar">{initials(customer.fullName)}</div>
+        <CustomerAvatar customer={customer} />
         <div className="customer-text">
           <h3>{customer.fullName}</h3>
           <p>

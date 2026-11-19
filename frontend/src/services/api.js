@@ -18,7 +18,12 @@ export const getErrorMessage = (err, fallback = 'Something went wrong. Please tr
 
 export const getFieldErrors = (err) => err.response?.data?.errors || {};
 
-export const fileUrl = (filename) => `${API_BASE}/uploads/${filename}`;
+// Photos and ID proofs are served by per-customer API routes (there is no public /uploads folder).
+// `version` (e.g. the customer's updatedAt) makes the browser reload the image after a replacement.
+export const profilePhotoUrl = (customerId, version = '') =>
+  `${API_BASE}/api/customers/${customerId}/profile-photo${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+export const idProofUrl = (customerId, version = '') =>
+  `${API_BASE}/api/customers/${customerId}/id-proof${version ? `?v=${encodeURIComponent(version)}` : ''}`;
 
 // Dashboard & blocks
 export const fetchDashboard = () => http.get('/dashboard').then(data);
@@ -38,3 +43,45 @@ export const fetchCustomer = (id) => http.get(`/customers/${id}`).then(data);
 export const saveCustomer = (id, formData) =>
   (id ? http.put(`/customers/${id}`, formData) : http.post('/customers', formData)).then(data);
 export const removeCustomer = (id) => http.delete(`/customers/${id}`).then(data);
+
+// Payments
+export const fetchMonthlyPayments = (month, blockId) =>
+  http.get('/payments', { params: { month, blockId: blockId || undefined } }).then(data);
+export const updatePaymentStatus = (paymentId, status) =>
+  http.patch(`/payments/${paymentId}`, { status }).then(data);
+export const fetchCustomerPaymentHistory = (customerId) =>
+  http.get(`/customers/${customerId}/payments`).then(data);
+
+/** Downloads a report as a Blob. blockId omitted = Overall PG. Errors keep the server's message. */
+export const downloadReport = async ({ blockId, month, format }) => {
+  try {
+    const response = await http.get('/reports', {
+      params: { blockId: blockId || undefined, month, format },
+      responseType: 'blob',
+      timeout: 90000, // a cold-starting Render instance can be slow on the first request
+    });
+    return response.data;
+  } catch (err) {
+    // With responseType "blob" the JSON error body arrives as a Blob - turn it back into an object.
+    if (err.response?.data instanceof Blob) {
+      try {
+        err.response.data = JSON.parse(await err.response.data.text());
+      } catch {
+        err.response.data = {};
+      }
+    }
+    throw err;
+  }
+};
+
+/** Saves a Blob through the browser's normal download flow. */
+export const saveBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+};

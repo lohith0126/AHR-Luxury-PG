@@ -1,30 +1,22 @@
-const fs = require('fs');
-const crypto = require('crypto');
 const multer = require('multer');
 const HttpError = require('../utils/HttpError');
-const { UPLOAD_DIR, MAX_FILE_SIZE } = require('../config/constants');
+const { MAX_FILE_SIZE } = require('../config/constants');
 
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-// Extension comes from the verified mimetype, never from the user-supplied filename.
-const ALLOWED_TYPES = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'application/pdf': '.pdf',
-};
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) =>
-    cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ALLOWED_TYPES[file.mimetype]}`),
+// Files are held in memory just long enough to be validated (by their real
+// bytes, see utils/files.js) and written to MongoDB - nothing touches the disk.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE, files: 2, fields: 30 },
+  fileFilter: (req, file, cb) => {
+    if (file.fieldname === 'profilePhoto' || file.fieldname === 'idProofFile') return cb(null, true);
+    return cb(new HttpError(400, 'Unexpected file field.'));
+  },
 });
 
-const fileFilter = (req, file, cb) => {
-  if (ALLOWED_TYPES[file.mimetype]) return cb(null, true);
-  return cb(new HttpError(400, 'Invalid ID proof file. Upload a JPG, PNG, WEBP image or a PDF.'));
-};
+// Up to one file per field; either, both or neither may be sent.
+const uploadCustomerFiles = upload.fields([
+  { name: 'profilePhoto', maxCount: 1 },
+  { name: 'idProofFile', maxCount: 1 },
+]);
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_FILE_SIZE, files: 1 } });
-
-module.exports = { uploadIdProof: upload.single('idProofFile') };
+module.exports = { uploadCustomerFiles };

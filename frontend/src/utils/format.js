@@ -27,6 +27,28 @@ export const maskIdNumber = (type, number = '') => {
 
 export const isPdf = (filename = '') => filename.toLowerCase().endsWith('.pdf');
 
+export const currentBillingMonth = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+/** "YYYY-MM" -> { year, month } (1-indexed month), for the month/year dropdowns. */
+export const splitBillingMonth = (ym) => {
+  const [year, month] = ym.split('-').map(Number);
+  return { year, month };
+};
+
+export const toBillingMonth = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
+
+/** "YYYY-MM" -> "October 2026" */
+export const formatBillingMonth = (ym, monthNames) => {
+  const { year, month } = splitBillingMonth(ym);
+  return `${monthNames[month - 1]} ${year}`;
+};
+
+export const formatCurrency = (amount = 0) =>
+  `₹${Number(amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
 export const initials = (name = '') =>
   name
     .split(/\s+/)
